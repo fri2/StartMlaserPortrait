@@ -61,12 +61,19 @@ if not "%ERR%"=="0" (
 exit /b %ERR%
 
 # POWERSHELL_PAYLOAD_BEGIN
+# The batch section above extracts everything after this marker to a temporary
+# PowerShell file, then runs it with the parameters below.
 param(
+    # ValidateSet gives a clear PowerShell error if a caller passes an unknown
+    # mode. "paysage" is kept as a practical alias for "landscape".
     [ValidateSet("start", "toggle", "portrait", "landscape", "paysage", "portrait-flipped", "landscape-flipped")]
     [string]$Action = "start",
 
+    # AppPath is provided by the batch variable MLASER_APP.
     [string]$AppPath = "C:\Users\dad\Desktop\Mlaser-v0.0.1.51_Beta\MainApp",
 
+    # WaitSeconds controls how long the screen remains in portrait after Mlaser
+    # has been launched in the default "start" action.
     [int]$WaitSeconds = 3
 )
 
@@ -81,6 +88,9 @@ using System.Runtime.InteropServices;
 
 public class DisplayRotation
 {
+    // This structure mirrors the native Windows DEVMODE layout. PowerShell
+    // cannot call the display rotation API directly, so the script defines this
+    // tiny C# helper at runtime with Add-Type.
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DEVMODE
     {
@@ -130,6 +140,8 @@ public class DisplayRotation
         ref DEVMODE devMode
     );
 
+    // ChangeDisplaySettingsEx applies the modified DEVMODE. Returning the raw
+    // Windows result code lets PowerShell report a precise failure code.
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int ChangeDisplaySettingsEx(
         string deviceName,
@@ -144,6 +156,8 @@ public class DisplayRotation
         const int ENUM_CURRENT_SETTINGS = -1;
 
         DEVMODE dm = new DEVMODE();
+        // Windows requires dmSize to be filled before the structure is passed
+        // to EnumDisplaySettings.
         dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
 
         // Passing null targets the default display, which is the intended
@@ -193,6 +207,8 @@ function Set-ScreenOrientation {
         [string]$Mode
     )
 
+    # Convert readable mode names used by the batch file to the numeric Windows
+    # orientation values expected by ChangeDisplaySettingsEx.
     $orientationMap = @{
         # Windows orientation values:
         # 0 = landscape, 1 = portrait, 2 = landscape flipped, 3 = portrait flipped.
@@ -240,6 +256,7 @@ function Start-Mlaser {
 
     $found = $null
 
+    # Try candidates in order and stop at the first path that exists.
     foreach ($candidate in $candidates) {
         if (Test-Path -LiteralPath $candidate) {
             $found = $candidate
@@ -251,10 +268,14 @@ function Start-Mlaser {
         throw "Application not found: $Path or $Path.exe"
     }
 
+    # Start Mlaser in the background. The launcher does not wait for Mlaser to
+    # close; it only waits WaitSeconds before restoring landscape.
     Start-Process -FilePath $found | Out-Null
 }
 
 try {
+    # Command modes either perform one explicit action or run the full default
+    # portrait -> launch -> wait -> landscape workflow.
     switch ($Action) {
         "toggle" {
             Toggle-ScreenOrientation
