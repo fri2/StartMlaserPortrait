@@ -14,7 +14,7 @@ The script is designed to work when launched from a local folder or from a UNC p
 ## Requirements
 
 No extra GPU utility or third-party dependency is required. The script does not
-depend on NVIDIA Control Panel, AMD Radeon software, or Intel graphics tools.
+depend on NVIDIA Control Panel, AMD Radeon software, or INTEL graphics tools.
 
 The script only uses components normally available on Windows:
 
