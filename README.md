@@ -45,6 +45,8 @@ Double-click or run without arguments:
 StartMlaserPortrait.bat
 ```
 
+For one-click access, create a desktop shortcut to `StartMlaserPortrait.bat`. You can also assign a keyboard shortcut in the shortcut properties, so Windows can launch the application directly from that hotkey.
+
 Supported command-line modes:
 
 ```cmd
