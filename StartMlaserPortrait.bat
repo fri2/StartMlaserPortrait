@@ -33,6 +33,11 @@ set "WAIT_SECONDS=3"
 set "ROTATE_SELF=%~f0"
 set "ROTATE_TMPPS=%TEMP%\StartMlaserPortrait_%RANDOM%_%RANDOM%.ps1"
 
+rem Extract the embedded PowerShell payload to a temporary local .ps1 file.
+rem This avoids depending on the current CMD directory, which matters when the
+rem batch file is launched from a UNC path such as \\Friportable\Charge\Tools.
+rem The marker string is assembled in two pieces so this extraction command does
+rem not accidentally split on its own command line.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$marker = '# POWERSHELL_PAYLOAD' + '_BEGIN'; $src = Get-Content -Raw -LiteralPath $env:ROTATE_SELF; $parts = $src -split [regex]::Escape($marker), 2; if ($parts.Count -lt 2) { throw 'PowerShell payload marker not found.' }; Set-Content -LiteralPath $env:ROTATE_TMPPS -Value $parts[1] -Encoding UTF8"
 if errorlevel 1 (
     echo Error: could not prepare the temporary PowerShell script.
@@ -40,6 +45,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem Run the temporary PowerShell script, then preserve its exit code before
+rem deleting the temporary file.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROTATE_TMPPS%" -Action "%ACTION%" -AppPath "%MLASER_APP%" -WaitSeconds "%WAIT_SECONDS%"
 set "ERR=%ERRORLEVEL%"
 
@@ -66,6 +73,8 @@ param(
 # Change this path when installing Mlaser somewhere else.
 $MlaserApplicationPath = $AppPath
 
+# The C# block exposes the small part of the Windows display API that is needed
+# to read and change the current screen orientation.
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -75,6 +84,8 @@ public class DisplayRotation
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DEVMODE
     {
+        // DEVMODE is the Windows structure used by EnumDisplaySettings and
+        // ChangeDisplaySettingsEx. The field order must match the native API.
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
         public string dmDeviceName;
         public short dmSpecVersion;
@@ -135,6 +146,8 @@ public class DisplayRotation
         DEVMODE dm = new DEVMODE();
         dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
 
+        // Passing null targets the default display, which is the intended
+        // single-screen setup for this launcher.
         if (!EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm))
             return -1;
 
@@ -157,6 +170,8 @@ public class DisplayRotation
 
         int current = dm.dmDisplayOrientation;
 
+        // Width and height must be swapped when moving between landscape-like
+        // and portrait-like orientations.
         if ((current % 2) != (target % 2))
         {
             int temp = dm.dmPelsWidth;
@@ -179,6 +194,8 @@ function Set-ScreenOrientation {
     )
 
     $orientationMap = @{
+        # Windows orientation values:
+        # 0 = landscape, 1 = portrait, 2 = landscape flipped, 3 = portrait flipped.
         "landscape"         = 0
         "portrait"          = 1
         "landscape-flipped" = 2
@@ -200,9 +217,11 @@ function Toggle-ScreenOrientation {
     }
 
     if ($current -eq 0 -or $current -eq 2) {
+        # Any landscape state toggles to the normal portrait orientation.
         Set-ScreenOrientation -Mode "portrait"
     }
     else {
+        # Any portrait state toggles back to the normal landscape orientation.
         Set-ScreenOrientation -Mode "landscape"
     }
 }
@@ -212,6 +231,7 @@ function Start-Mlaser {
         [string]$Path
     )
 
+    # Accept either the exact executable path or the same path without ".exe".
     $candidates = @($Path)
 
     if (-not $Path.EndsWith(".exe", [StringComparison]::OrdinalIgnoreCase)) {
@@ -246,6 +266,7 @@ try {
             Set-ScreenOrientation -Mode "landscape"
         }
         "paysage" {
+            # French alias kept for convenience.
             Set-ScreenOrientation -Mode "landscape"
         }
         "portrait-flipped" {
@@ -266,6 +287,8 @@ try {
                 Write-Error $_.Exception.Message
             }
             finally {
+                # Always try to restore landscape after the default start flow,
+                # even if Mlaser fails to launch after the portrait rotation.
                 try {
                     Set-ScreenOrientation -Mode "landscape"
                 }
