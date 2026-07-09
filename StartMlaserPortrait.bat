@@ -1,34 +1,78 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$BatchPath = $env:START_MLASER_BATCH_PATH; if ([string]::IsNullOrWhiteSpace($BatchPath)) { $BatchPath = '%~f0' }; $Marker = '# POWERSHELL' + '_BEGIN'; $Content = Get-Content -LiteralPath $BatchPath -Raw; $Parts = $Content -split [regex]::Escape($Marker), 2; if ($Parts.Count -lt 2) { Write-Error 'PowerShell payload marker not found.'; exit 1 }; & ([scriptblock]::Create($Parts[1])) @args" %*
-exit /b %ERRORLEVEL%
+rem ============================================================
+rem  StartMlaserPortrait.bat
+rem  Standalone file: screen rotation + Mlaser launch
+rem ============================================================
+rem
+rem Usage:
+rem   Double-click or no argument:
+rem       1) rotate the screen to portrait
+rem       2) start Mlaser without waiting for it to close
+rem       3) wait a few seconds
+rem       4) rotate the screen back to landscape
+rem
+rem   With argument:
+rem       StartMlaserPortrait.bat toggle
+rem       StartMlaserPortrait.bat portrait
+rem       StartMlaserPortrait.bat landscape
+rem       StartMlaserPortrait.bat paysage
+rem
+rem Keyboard shortcut for toggle:
+rem   Create a shortcut to this file and add " toggle" at the end of the target.
+rem   Example: "C:\Users\dad\Tools\StartMlaserPortrait.bat" toggle
+rem ============================================================
 
-# POWERSHELL_BEGIN
-$ErrorActionPreference = 'Stop'
+set "ACTION=%~1"
+if "%ACTION%"=="" set "ACTION=start"
+
+set "MLASER_APP=C:\Users\dad\Desktop\Mlaser-v0.0.1.51_Beta\MainApp"
+set "WAIT_SECONDS=3"
+
+set "ROTATE_SELF=%~f0"
+set "ROTATE_TMPPS=%TEMP%\StartMlaserPortrait_%RANDOM%_%RANDOM%.ps1"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$marker = '# POWERSHELL_PAYLOAD' + '_BEGIN'; $src = Get-Content -Raw -LiteralPath $env:ROTATE_SELF; $parts = $src -split [regex]::Escape($marker), 2; if ($parts.Count -lt 2) { throw 'PowerShell payload marker not found.' }; Set-Content -LiteralPath $env:ROTATE_TMPPS -Value $parts[1] -Encoding UTF8"
+if errorlevel 1 (
+    echo Error: could not prepare the temporary PowerShell script.
+    pause
+    exit /b 1
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROTATE_TMPPS%" -Action "%ACTION%" -AppPath "%MLASER_APP%" -WaitSeconds "%WAIT_SECONDS%"
+set "ERR=%ERRORLEVEL%"
+
+del "%ROTATE_TMPPS%" >nul 2>nul
+
+if not "%ERR%"=="0" (
+    echo.
+    echo Error during execution. Exit code: %ERR%
+    pause
+)
+
+exit /b %ERR%
+
+# POWERSHELL_PAYLOAD_BEGIN
+param(
+    [ValidateSet("start", "toggle", "portrait", "landscape", "paysage", "portrait-flipped", "landscape-flipped")]
+    [string]$Action = "start",
+
+    [string]$AppPath = "C:\Users\dad\Desktop\Mlaser-v0.0.1.51_Beta\MainApp",
+
+    [int]$WaitSeconds = 3
+)
 
 # Change this path when installing Mlaser somewhere else.
-$MlaserApplicationPath = 'C:\Users\dad\Desktop\Mlaser-v0.0.1.51_Beta\MainApp'
+$MlaserApplicationPath = $AppPath
 
-$LaunchDelaySeconds = 5
-$Mode = if ($args.Count -gt 0) { $args[0].ToLowerInvariant() } else { '' }
-
-$DisplayApiSource = @'
+Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 
-public static class DisplaySettings
+public class DisplayRotation
 {
-    public const int ENUM_CURRENT_SETTINGS = -1;
-    public const int CDS_UPDATEREGISTRY = 0x00000001;
-    public const int DISP_CHANGE_SUCCESSFUL = 0;
-    public const int DM_DISPLAYORIENTATION = 0x00000080;
-    public const int DM_PELSWIDTH = 0x00080000;
-    public const int DM_PELSHEIGHT = 0x00100000;
-    public const int DMDO_DEFAULT = 0;
-    public const int DMDO_90 = 1;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DEVMODE
     {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
@@ -38,15 +82,18 @@ public static class DisplaySettings
         public short dmSize;
         public short dmDriverExtra;
         public int dmFields;
+
         public int dmPositionX;
         public int dmPositionY;
         public int dmDisplayOrientation;
         public int dmDisplayFixedOutput;
+
         public short dmColor;
         public short dmDuplex;
         public short dmYResolution;
         public short dmTTOption;
         public short dmCollate;
+
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
         public string dmFormName;
         public short dmLogPixels;
@@ -65,135 +112,175 @@ public static class DisplaySettings
         public int dmPanningHeight;
     }
 
-    [DllImport("user32.dll")]
-    public static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool EnumDisplaySettings(
+        string deviceName,
+        int modeNum,
+        ref DEVMODE devMode
+    );
 
-    [DllImport("user32.dll")]
-    public static extern int ChangeDisplaySettingsEx(string deviceName, ref DEVMODE devMode, IntPtr hwnd, int flags, IntPtr lParam);
-}
-'@
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int ChangeDisplaySettingsEx(
+        string deviceName,
+        ref DEVMODE devMode,
+        IntPtr hwnd,
+        int flags,
+        IntPtr lParam
+    );
 
-if (-not ('DisplaySettings' -as [type])) {
-    Add-Type -TypeDefinition $DisplayApiSource
-}
+    public static int GetOrientation()
+    {
+        const int ENUM_CURRENT_SETTINGS = -1;
 
-function Get-CurrentDisplayMode {
-    $devMode = New-Object DisplaySettings+DEVMODE
-    $devMode.dmSize = [System.Runtime.InteropServices.Marshal]::SizeOf($devMode)
+        DEVMODE dm = new DEVMODE();
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
 
-    if (-not [DisplaySettings]::EnumDisplaySettings($null, [DisplaySettings]::ENUM_CURRENT_SETTINGS, [ref]$devMode)) {
-        throw 'Could not read the current display settings.'
+        if (!EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm))
+            return -1;
+
+        return dm.dmDisplayOrientation;
     }
 
-    return $devMode
-}
+    public static int SetOrientation(int target)
+    {
+        const int ENUM_CURRENT_SETTINGS = -1;
+        const int DM_DISPLAYORIENTATION = 0x00000080;
+        const int DM_PELSWIDTH = 0x00080000;
+        const int DM_PELSHEIGHT = 0x00100000;
+        const int CDS_UPDATEREGISTRY = 0x00000001;
 
-function Set-DisplayOrientation {
-    param(
-        [Parameter(Mandatory)]
-        [ValidateSet('Landscape', 'Portrait')]
-        [string] $Orientation
-    )
+        DEVMODE dm = new DEVMODE();
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
 
-    $devMode = Get-CurrentDisplayMode
-    $targetOrientation = if ($Orientation -eq 'Portrait') {
-        [DisplaySettings]::DMDO_90
-    } else {
-        [DisplaySettings]::DMDO_DEFAULT
-    }
+        if (!EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm))
+            return -1;
 
-    $isCurrentlyLandscape = $devMode.dmDisplayOrientation -eq [DisplaySettings]::DMDO_DEFAULT
-    $willBeLandscape = $targetOrientation -eq [DisplaySettings]::DMDO_DEFAULT
+        int current = dm.dmDisplayOrientation;
 
-    if ($isCurrentlyLandscape -ne $willBeLandscape) {
-        $oldWidth = $devMode.dmPelsWidth
-        $devMode.dmPelsWidth = $devMode.dmPelsHeight
-        $devMode.dmPelsHeight = $oldWidth
-    }
-
-    $devMode.dmDisplayOrientation = $targetOrientation
-    $devMode.dmFields = [DisplaySettings]::DM_DISPLAYORIENTATION -bor [DisplaySettings]::DM_PELSWIDTH -bor [DisplaySettings]::DM_PELSHEIGHT
-
-    $result = [DisplaySettings]::ChangeDisplaySettingsEx($null, [ref]$devMode, [IntPtr]::Zero, [DisplaySettings]::CDS_UPDATEREGISTRY, [IntPtr]::Zero)
-    if ($result -ne [DisplaySettings]::DISP_CHANGE_SUCCESSFUL) {
-        throw "Display rotation failed with code $result."
-    }
-}
-
-function Get-MlaserLaunchTarget {
-    param(
-        [Parameter(Mandatory)]
-        [string] $ApplicationPath
-    )
-
-    if (Test-Path -LiteralPath $ApplicationPath -PathType Leaf) {
-        return (Get-Item -LiteralPath $ApplicationPath).FullName
-    }
-
-    if (Test-Path -LiteralPath "$ApplicationPath.exe" -PathType Leaf) {
-        return (Get-Item -LiteralPath "$ApplicationPath.exe").FullName
-    }
-
-    if (Test-Path -LiteralPath $ApplicationPath -PathType Container) {
-        $directExe = Join-Path -Path $ApplicationPath -ChildPath 'MainApp.exe'
-        if (Test-Path -LiteralPath $directExe -PathType Leaf) {
-            return (Get-Item -LiteralPath $directExe).FullName
+        if ((current % 2) != (target % 2))
+        {
+            int temp = dm.dmPelsWidth;
+            dm.dmPelsWidth = dm.dmPelsHeight;
+            dm.dmPelsHeight = temp;
         }
 
-        $candidate = Get-ChildItem -LiteralPath $ApplicationPath -Filter '*.exe' -File | Select-Object -First 1
-        if ($null -ne $candidate) {
-            return $candidate.FullName
-        }
+        dm.dmDisplayOrientation = target;
+        dm.dmFields = DM_DISPLAYORIENTATION | DM_PELSWIDTH | DM_PELSHEIGHT;
+
+        return ChangeDisplaySettingsEx(null, ref dm, IntPtr.Zero, CDS_UPDATEREGISTRY, IntPtr.Zero);
+    }
+}
+"@
+
+function Set-ScreenOrientation {
+    param(
+        [ValidateSet("landscape", "portrait", "landscape-flipped", "portrait-flipped")]
+        [string]$Mode
+    )
+
+    $orientationMap = @{
+        "landscape"         = 0
+        "portrait"          = 1
+        "landscape-flipped" = 2
+        "portrait-flipped"  = 3
     }
 
-    throw "Mlaser executable not found from path: $ApplicationPath"
+    $result = [DisplayRotation]::SetOrientation($orientationMap[$Mode])
+
+    if ($result -ne 0) {
+        throw "Failed to change screen orientation to '$Mode'. Exit code: $result"
+    }
+}
+
+function Toggle-ScreenOrientation {
+    $current = [DisplayRotation]::GetOrientation()
+
+    if ($current -lt 0) {
+        throw "Could not read the current screen orientation."
+    }
+
+    if ($current -eq 0 -or $current -eq 2) {
+        Set-ScreenOrientation -Mode "portrait"
+    }
+    else {
+        Set-ScreenOrientation -Mode "landscape"
+    }
 }
 
 function Start-Mlaser {
-    $launchTarget = Get-MlaserLaunchTarget -ApplicationPath $MlaserApplicationPath
-    $workingDirectory = Split-Path -Path $launchTarget -Parent
-    Start-Process -FilePath $launchTarget -WorkingDirectory $workingDirectory
+    param(
+        [string]$Path
+    )
+
+    $candidates = @($Path)
+
+    if (-not $Path.EndsWith(".exe", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidates += "$Path.exe"
+    }
+
+    $found = $null
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            $found = $candidate
+            break
+        }
+    }
+
+    if ($null -eq $found) {
+        throw "Application not found: $Path or $Path.exe"
+    }
+
+    Start-Process -FilePath $found | Out-Null
 }
 
-switch ($Mode) {
-    '' {
-        $exitCode = 0
-        try {
-            Set-DisplayOrientation -Orientation Portrait
-            Start-Mlaser
-            Start-Sleep -Seconds $LaunchDelaySeconds
-        } catch {
-            $exitCode = 1
-            Write-Error $_
-        } finally {
+try {
+    switch ($Action) {
+        "toggle" {
+            Toggle-ScreenOrientation
+        }
+        "portrait" {
+            Set-ScreenOrientation -Mode "portrait"
+        }
+        "landscape" {
+            Set-ScreenOrientation -Mode "landscape"
+        }
+        "paysage" {
+            Set-ScreenOrientation -Mode "landscape"
+        }
+        "portrait-flipped" {
+            Set-ScreenOrientation -Mode "portrait-flipped"
+        }
+        "landscape-flipped" {
+            Set-ScreenOrientation -Mode "landscape-flipped"
+        }
+        "start" {
+            $exitCode = 0
             try {
-                Set-DisplayOrientation -Orientation Landscape
-            } catch {
-                $exitCode = 1
-                Write-Error $_
+                Set-ScreenOrientation -Mode "portrait"
+                Start-Mlaser -Path $MlaserApplicationPath
+                Start-Sleep -Seconds $WaitSeconds
             }
+            catch {
+                $exitCode = 1
+                Write-Error $_.Exception.Message
+            }
+            finally {
+                try {
+                    Set-ScreenOrientation -Mode "landscape"
+                }
+                catch {
+                    $exitCode = 1
+                    Write-Error $_.Exception.Message
+                }
+            }
+            exit $exitCode
         }
-        exit $exitCode
     }
-    'toggle' {
-        $currentMode = Get-CurrentDisplayMode
-        if ($currentMode.dmDisplayOrientation -eq [DisplaySettings]::DMDO_DEFAULT) {
-            Set-DisplayOrientation -Orientation Portrait
-        } else {
-            Set-DisplayOrientation -Orientation Landscape
-        }
-        exit 0
-    }
-    'portrait' {
-        Set-DisplayOrientation -Orientation Portrait
-        exit 0
-    }
-    { $_ -in @('landscape', 'paysage') } {
-        Set-DisplayOrientation -Orientation Landscape
-        exit 0
-    }
-    default {
-        Write-Host 'Usage: StartMlaserPortrait.bat [toggle|portrait|landscape|paysage]'
-        exit 2
-    }
+
+    exit 0
+}
+catch {
+    Write-Error $_.Exception.Message
+    exit 1
 }
