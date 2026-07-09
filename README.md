@@ -11,6 +11,23 @@ The default double-click workflow is:
 
 The script is designed to work when launched from a local folder or from a UNC path such as `\\Friportable\Charge\Tools`.
 
+## Requirements
+
+No extra NVIDIA utility or third-party dependency is required.
+
+The script only uses components normally available on Windows:
+
+- `cmd.exe` to run the batch file;
+- `powershell.exe` to run the embedded PowerShell payload;
+- `user32.dll`, through the Windows display API, to change the screen orientation;
+- PowerShell `Add-Type` to compile the small embedded C# helper at runtime.
+
+Make sure that:
+
+- Mlaser exists at the configured path, or update `MLASER_APP`;
+- PowerShell is not blocked by a very restrictive system policy;
+- Windows is allowed to run the batch file from the chosen location, including a UNC path if used.
+
 ## Files
 
 - `StartMlaserPortrait.bat`: the launcher script.
